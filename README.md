@@ -1,8 +1,14 @@
-# Active Directory Lab (Hyper-V)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/joser14/joser14/main/logo.webp" width="200" alt="GHOSTSHIELD LABS">
+  <br><b>GHOSTSHIELD LABS</b>
+</p>
 
-An isolated, self-contained AD lab on your machine for learning and security practice.
-Everything is automated: the script builds the VMs from ISOs, promotes the DC, joins the
-clients, and installs the roles below. Keep this lab off any production network.
+# AD-LAB: Active Directory Lab on Hyper-V
+
+An isolated, self-contained Active Directory lab on your own machine, for learning and security practice.
+Everything is automated: the script builds the VMs from ISOs, promotes the domain controller, joins the
+clients and installs the roles below. **Keep this lab off any production network.** It is deliberately
+weakened (Defender off, a service account with SPNs) so that lab tooling runs.
 
 ## What you get
 
@@ -12,8 +18,8 @@ clients, and installs the roles below. Keep this lab off any production network.
 | WS01  | Windows 11 Pro                   | 10.10.10.21   | Domain member, **SQL Server 2022** running as `LAB\svc_sql` |
 | WS02  | Windows 11 Pro                   | 10.10.10.22   | Domain member |
 
-- **Network:** internal Hyper-V switch `ADLab`, `10.10.10.0/24`, host is the gateway `10.10.10.1`
-  with NAT so the VMs can reach the internet. No bridge to your LAN.
+- **Network:** internal Hyper-V switch `ADLab`, `10.10.10.0/24`. The host is the gateway `10.10.10.1`
+  and does NAT so the VMs can reach the internet. There is no bridge to your LAN.
 - **Domain:** `lab.local` / NetBIOS `LAB`.
 
 ### Accounts (all use the password you type at the prompt)
@@ -22,38 +28,40 @@ clients, and installs the roles below. Keep this lab off any production network.
 | `LAB\Administrator` | Built-in domain admin |
 | `LAB\da_admin` | Extra **domain admin** (member of Domain Admins), also a SQL sysadmin |
 | `LAB\alice`, `LAB\bob` | Standard users, in group `Lab Users` |
-| `LAB\svc_sql`  | SQL Server service account (own password if you set one; SPNs registered) |
+| `LAB\svc_sql`  | SQL Server service account (its own password if you set one; SPNs registered) |
 
 ### Group Policy
-- **Disable Defender** GPO linked at the domain root, security-filtered to **Authenticated Users**
-  (turns off real-time/behavior monitoring across the domain so lab tooling runs unhindered).
+- A **Disable Defender** GPO linked at the domain root, security-filtered to **Authenticated Users**.
+  It turns off real-time and behaviour monitoring across the domain so lab tooling runs unhindered.
 
 ## Prerequisites
-1. **Windows Server ISO** — you don't have one yet. Grab the free 180-day **evaluation** of
-   Windows Server 2022 (or 2025) from Microsoft Evaluation Center. The build page is open in your
-   browser. Download the **ISO**, note its path, pass it with `-ServerIso`.
-2. **Windows 11 ISO** — already present: `C:\ISOs\Win11_24H2_English_x64.iso`.
-3. **Hyper-V** enabled (it is) and you run the script **as Administrator**.
-4. ~120 GB free (base images + 3 VMs). You have plenty on D:.
+1. **Windows Server ISO.** The free 180-day evaluation of Windows Server 2022 or 2025 from the
+   [Microsoft Evaluation Center](https://www.microsoft.com/evalcenter) works. Download the **ISO** and pass
+   its path with `-ServerIso`.
+2. **Windows 11 ISO** (24H2 or later) from [Microsoft](https://www.microsoft.com/software-download/windows11).
+   The script looks for `Downloads\Win11_24H2_English_x64.iso`; pass `-ClientIso <path>` if yours is elsewhere.
+   If you leave out `-ServerIso`, it picks the newest ISO in `Downloads` with "server" in its name.
+3. **Hyper-V** enabled (Windows 10/11 Pro, Enterprise or Education), and the script run **as Administrator**.
+4. About **120 GB** free disk space for the base images and 3 VMs, and 16 GB+ RAM recommended.
 
 ## Run it
 Open **PowerShell as Administrator**, then:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-.\Build-ADLab.ps1 -ServerIso "C:\ISOs\<server-eval>.iso"
+.\Build-ADLab.ps1 -ServerIso "C:\ISOs\SERVER_EVAL.iso"
 ```
 
 You'll be prompted for:
-- a lab password (used for all accounts; needs upper + lower + digit, 8+ chars), and
-- an optional separate password for `svc_sql` (Enter to reuse the first).
+- a lab password, used for all accounts (upper case, lower case and a digit, 8+ characters), and
+- an optional separate password for `svc_sql` (press Enter to reuse the first).
 
-The script is **idempotent** — re-run it and it skips anything already done. It uses PowerShell
+The script is **idempotent**: re-run it and it skips anything already done. It uses PowerShell
 Direct (no network needed to configure the VMs), so it works even before the domain is up.
 
-Skip SQL (faster first build) with `-SkipSql`. Point SQL at WS02 instead with `-SqlHost WS02`.
+Skip SQL (faster first build) with `-SkipSql`. Put SQL on WS02 instead with `-SqlHost WS02`.
 
-Expect **45–90 min** the first time (building base images + SQL install).
+Expect **45–90 minutes** the first time (building base images and installing SQL).
 
 ## Verify
 At the end the script prints the computers in AD. To check by hand, open **DC01** in Hyper-V
@@ -68,13 +76,18 @@ Invoke-Sqlcmd -ServerInstance WS01 -Query "SELECT @@VERSION"   # SQL up (run on 
 ## Tear it down
 ```powershell
 .\Destroy-ADLab.ps1            # removes VMs, disks, switch, NAT
-.\Destroy-ADLab.ps1 -KeepBase # keep base VHDs for a fast rebuild
+.\Destroy-ADLab.ps1 -KeepBase  # keeps the base VHDs for a fast rebuild
 ```
 
-## Notes / knobs
-- Everything parameterized at the top of `Build-ADLab.ps1`: `-LabPath`, `-DomainName`,
-  `-Subnet`, `-SqlHost`, `-SqlBootstrapUrl`.
-- If the SQL download link ever 404s, download SQL Server 2022 **Developer** media yourself and
-  drop the `SQLServer2022-x64-ENU-*.exe` into `D:\ADLab\Media\SQL\` before running.
-- The Win11 clients get a virtual TPM + Secure Boot so 24H2 installs cleanly.
-```
+## Notes and options
+- Everything is a parameter at the top of `Build-ADLab.ps1`: `-LabPath` (default `D:\ADLab`),
+  `-DomainName`, `-Subnet`, `-SqlHost`, `-SqlBootstrapUrl`.
+- If the SQL download link ever returns 404, download SQL Server 2022 **Developer** media yourself and
+  put the `SQLServer2022-x64-ENU-*.exe` in `<LabPath>\Media\SQL\` before running.
+- The Windows 11 clients get a virtual TPM and Secure Boot so 24H2 installs cleanly.
+
+## Responsible use
+For learning and authorised testing only. Never connect this lab to a network you don't own.
+
+## Licence
+MIT, see [LICENSE](LICENSE).
