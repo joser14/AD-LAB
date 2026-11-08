@@ -10,6 +10,20 @@ Everything is automated: the script builds the VMs from ISOs, promotes the domai
 clients and installs the roles below. **Keep this lab off any production network.** It is deliberately
 weakened (Defender off, a service account with SPNs) so that lab tooling runs.
 
+Built for practising the Active Directory attack path from **TCM Security's PJPT**
+(Practical Junior Penetration Tester). Attacker box: **Kali on WSL** (see
+[Attacker box](#attacker-box-kali-on-wsl)) or the Kali ISO as a Hyper-V VM.
+
+### Default credentials
+All domain accounts share one lab password, set in `Run-Build.ps1` (or pass `-LabPassword`).
+Change it before use — it's a throwaway lab password; do not reuse it anywhere real.
+
+### Deliberate attack surface (the PJPT path)
+- `svc_sql` has a registered SPN → **Kerberoastable**.
+- `da_admin` is a **Domain Admin** (target for lateral movement / privilege escalation).
+- Defender is disabled via GPO so tooling (Responder, mimikatz, etc.) runs unhindered.
+- SQL Server with Windows auth → `xp_cmdshell` / impersonation practice.
+
 ## What you get
 
 | VM    | OS                               | IP            | Role |
@@ -22,7 +36,7 @@ weakened (Defender off, a service account with SPNs) so that lab tooling runs.
   and does NAT so the VMs can reach the internet. There is no bridge to your LAN.
 - **Domain:** `lab.local` / NetBIOS `LAB`.
 
-### Accounts (all use the password you type at the prompt)
+### Accounts (all use the lab password)
 | Account        | Purpose |
 |----------------|---------|
 | `LAB\Administrator` | Built-in domain admin |
@@ -56,12 +70,30 @@ You'll be prompted for:
 - a lab password, used for all accounts (upper case, lower case and a digit, 8+ characters), and
 - an optional separate password for `svc_sql` (press Enter to reuse the first).
 
+For a fully unattended run (no prompts), pass `-LabPassword` (and optionally `-SqlPassword`), or use the
+`Run-Build.ps1` elevated launcher.
+
 The script is **idempotent**: re-run it and it skips anything already done. It uses PowerShell
 Direct (no network needed to configure the VMs), so it works even before the domain is up.
 
 Skip SQL (faster first build) with `-SkipSql`. Put SQL on WS02 instead with `-SqlHost WS02`.
 
 Expect **45–90 minutes** the first time (building base images and installing SQL).
+
+## Attacker box (Kali on WSL)
+`setup-kali.sh` and `install-kali-tools.sh` set up a Kali WSL distro with a sudo user and the PJPT
+toolset (netexec, impacket, Responder, BloodHound, evil-winrm, enum4linux-ng, and more).
+
+```powershell
+wsl --install -d kali-linux --no-launch
+# then, as root inside the distro, run setup-kali.sh and install-kali-tools.sh
+```
+
+**Note on reaching the lab:** WSL2 is NAT'd onto its own network, separate from the Hyper-V
+`10.10.10.0/24` lab, so Kali can't reach the DC by default. Either enable host routing between the
+two networks (host-side IP forwarding + a route in Kali), try WSL mirrored networking
+(`networkingMode=mirrored` in `%USERPROFILE%\.wslconfig`, if it initialises on your host), or run
+Kali from the ISO as a Hyper-V VM on the `ADLab` switch for a native `10.10.10.x` address.
 
 ## Verify
 At the end the script prints the computers in AD. To check by hand, open **DC01** in Hyper-V

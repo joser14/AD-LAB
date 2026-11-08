@@ -1,0 +1,4 @@
+build-log.txt
+*.iso
+*.vhdx
+CREDS.txt

@@ -24,7 +24,10 @@ param(
     [string]$SqlHost     = "WS01",
     # SQL Server 2022 Developer bootstrapper (Microsoft). Change if Microsoft moves the link.
     [string]$SqlBootstrapUrl = "https://go.microsoft.com/fwlink/p/?linkid=2215158",
-    [switch]$SkipSql
+    [switch]$SkipSql,
+    # Non-interactive: pass these to skip the password prompts.
+    [string]$LabPassword,
+    [string]$SqlPassword
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,12 +44,23 @@ if (-not (Test-Path $ClientIso)) { throw "Windows 11 ISO not found at $ClientIso
 Log "Server ISO: $ServerIso"
 Log "Client ISO: $ClientIso"
 
-$sec = Read-Host "Password for Administrator / labadmin / domain admin (needs upper, lower, digit, 8+ chars)" -AsSecureString
-$Password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+if ($LabPassword) {
+    $Password = $LabPassword
+} else {
+    $sec0 = Read-Host "Password for Administrator / labadmin / domain admin (needs upper, lower, digit, 8+ chars)" -AsSecureString
+    $Password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec0))
+}
 if ($Password.Length -lt 8) { throw "Password too short." }
-$sqlSec = Read-Host "Password for svc_sql (SQL service account; Enter = same as above)" -AsSecureString
-$SqlSvcPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sqlSec))
-if (-not $SqlSvcPassword) { $SqlSvcPassword = $Password }
+$sec = ConvertTo-SecureString $Password -AsPlainText -Force
+if ($SqlPassword) {
+    $SqlSvcPassword = $SqlPassword
+} elseif ($LabPassword) {
+    $SqlSvcPassword = $Password
+} else {
+    $sqlSec = Read-Host "Password for svc_sql (SQL service account; Enter = same as above)" -AsSecureString
+    $SqlSvcPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sqlSec))
+    if (-not $SqlSvcPassword) { $SqlSvcPassword = $Password }
+}
 
 $DCName = "DC01"; $DCIP = "$Subnet.10"; $Gateway = "$Subnet.1"
 $Clients = @(@{ Name = "WS01"; IP = "$Subnet.21" }, @{ Name = "WS02"; IP = "$Subnet.22" })
@@ -97,15 +111,30 @@ function New-BaseVhd {
             New-Partition -DiskNumber $disk.Number -Size 16MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' | Out-Null
             $win = New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
             $win | Format-Volume -FileSystem NTFS -Force -Confirm:$false | Out-Null
-            $efi | Add-PartitionAccessPath -AssignDriveLetter
-            $win | Add-PartitionAccessPath -AssignDriveLetter
-            $S = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $efi.PartitionNumber).DriveLetter
-            $W = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $win.PartitionNumber).DriveLetter
+
+            # Assign explicit free drive letters (ESP does not reliably get one via -AssignDriveLetter)
+            $used = @()
+            $used += (Get-Volume | Where-Object DriveLetter).DriveLetter
+            $used += (Get-PSDrive -PSProvider FileSystem).Name
+            $free = @(67..90 | ForEach-Object { [char]$_ } | Where-Object { $used -notcontains "$_" })
+            $S = $free[0]; $W = $free[1]
+            Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $efi.PartitionNumber -AccessPath "$S`:"
+            Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $win.PartitionNumber -AccessPath "$W`:"
+            Start-Sleep 2
 
             Expand-WindowsImage -ImagePath $wim -Index $img.ImageIndex -ApplyPath "$W`:\" | Out-Null
-            & bcdboot.exe "$W`:\Windows" /s "$S`:" /f UEFI | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "bcdboot failed" }
-        } finally { Dismount-VHD -Path $VhdPath }
+            # Use the applied image's OWN bcdboot (host-vs-image version mismatch causes
+            # "Failure when attempting to copy boot files"); pin locale.
+            $bb = "$W`:\Windows\System32\bcdboot.exe"
+            if (-not (Test-Path $bb)) { $bb = "bcdboot.exe" }
+            $bout = & $bb "$W`:\Windows" /s "$S`:" /f UEFI /l en-us 2>&1
+            if ($LASTEXITCODE -ne 0) { $bout = & $bb "$W`:\Windows" /s "$S`:" /f ALL 2>&1 }
+            if ($LASTEXITCODE -ne 0) { throw "bcdboot failed (S=$S W=$W): $bout" }
+        } catch {
+            Dismount-VHD -Path $VhdPath -ErrorAction SilentlyContinue
+            Remove-Item $VhdPath -Force -ErrorAction SilentlyContinue   # drop the partial disk so a re-run rebuilds it
+            throw
+        } finally { Dismount-VHD -Path $VhdPath -ErrorAction SilentlyContinue }
     } finally { Dismount-DiskImage -ImagePath $Iso | Out-Null }
 }
 
